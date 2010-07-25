@@ -106,7 +106,7 @@ module EventMachine
           d = resolve_do domain
           @waiting += 1
           STDOUT.puts "Now waiting for #{@waiting}" if @verbose
-          on_one_done = lambda {
+          on_one_done = lambda { |d|
             @waiting -= 1
             look_pending
           }
@@ -265,29 +265,32 @@ module EventMachine
         @result = rslt # Deferrable
         @n_a_lookups = 0
 
+        # when we get a result
         self.callback {|resp|
+
+          # pull additional data out of the response - may not need to do further lookups
           addrs = {}
           resp.each_additional {|name,ttl,data|
             addrs.has_key?(name) ? (addrs[name] << data.address.to_s) : (addrs[name] = [data.address.to_s])
           }
 
-          @addresses = resp.answer.
-          sort {|a,b| a[2].preference <=> b[2].preference}.
-          map {|name,ttl,data|
-            ex = data.exchange
-            addrs[ex] or EM::DnsCache.resolve(ex.to_s)
+          # make a list of found exchanges
+          @addresses = resp.answer.sort {|a,b| a[2].preference <=> b[2].preference}.map {|name,ttl,data|
+            {:name => name.to_s, :exchange => data.exchange.to_s, :addresses => [], :lookup => EM::DnsCache.resolve(data.exchange.to_s)}
           }
 
-          @addresses.each_with_index {|a,ix|
-            if a.respond_to?(:set_deferred_status)
+          # look up the IP address of each exchange if necessary
+          @addresses.each_with_index do |a,ix|
+            lookup = a.delete(:lookup)
+            if lookup
               @n_a_lookups += 1
-              a.callback {|r|
-                @addresses[ix] = r
+              lookup.callback {|r|
+                @addresses[ix][:addresses] = r
                 @n_a_lookups -= 1
                 succeed_result if @n_a_lookups == 0
               }
             end
-          }
+          end
 
           succeed_result if @n_a_lookups == 0
         }
@@ -296,7 +299,7 @@ module EventMachine
       def succeed_result
         # Questionable whether we should uniq if it perturbs the sort order.
         # Also freeze it so some user can't wipe it out on us.
-        @result.succeed @addresses.flatten.uniq.freeze
+        @result.succeed @addresses
       end
 
     end
